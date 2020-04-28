@@ -1,52 +1,126 @@
+ function useBudgetIndexDb(method, object, cb){
+  const request = window.indexedDB.open("budgetdb", 1);
+
+  // Create schema
+  request.onupgradeneeded = event => {
+    const db = event.target.result;
+    
+    // Creates an object store with a listID keypath that can be used to query on.
+    const budget = db.createObjectStore("budget", {keyPath: 'id', autoIncrement: true});
+    const pending = db.createObjectStore("pending", {keyPath: 'id', autoIncrement: true});
+
+  }
+  
+  // Opens a transaction, accesses the budget objectStore and statusIndex.
+  request.onsuccess = () => {
+    const db = request.result;
+    const budgetTransaction = db.transaction(["budget"], "readwrite");
+    const pendingTransaction = db.transaction(["pending"], "readwrite");
+    const budgetStore = budgetTransaction.objectStore("budget");
+    const pendingStore = pendingTransaction.objectStore("pending");
+
+    if(method==="updateBudget"){
+      budgetStore.clear();
+      object.forEach(item => {budgetStore.add(item)});
+      cb();
+    }
+    else if(method==="updatePending"){
+      pendingStore.clear();
+      object.forEach(item => {budgetStore.add(item)});
+    }
+    else if(method==="addPending"){
+      pendingStore.add(object);
+    }else if(method==="addBudget"){
+      budgetStore.add(object);
+    }
+    else if(method==="getPending"){
+      const getPending = pendingStore.getAll();
+      getPending.onsuccess = (event) => {
+       
+        if(event.target.result.length!==0){
+          cb(event.target.result)
+        }else{
+          cb(false);
+        }
+
+      }
+    }else if(method==="getBudget"){
+      const getBudgetItems = budgetStore.getAll();
+      getBudgetItems.onsuccess = (event) => {
+        cb(event.target.result)
+      }
+      getBudgetItems.catch = (err) => {
+        console.log(err);
+      }
+      
+    }
+    else if(method==="clearPending"){
+      pendingStore.clear();
+    }
+  };
+}
+
 let transactions = [];
 let myChart;
 
 async function  updateAndGetData(){
-  console.log("getting pending")
-  const pending = JSON.parse(localStorage.getItem("pending"));
-  console.log(pending)
 
-  if (pending){
-    fetch("/api/transaction/bulk", {
-      method: "POST",
-      body: JSON.stringify(pending),
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json"
+  useBudgetIndexDb("getPending", "",function(pending){
+      //if there are pending items send in bulk the items to the database.
+      if (pending){
+
+        fetch("/api/transaction/bulk", {
+          method: "POST",
+          body: JSON.stringify(pending),
+          headers: {
+            Accept: "application/json, text/plain, */*",
+            "Content-Type": "application/json"
+          }
+        }).then(async ()=>{
+              useBudgetIndexDb("clearPending");
+              renderChart();  
+            }
+    
+          );
       }
-    }).then(async ()=>{
-          localStorage.setItem("pending","");
-          renderChart();
-        }
-
-      );
-  }
-  else{
-    renderChart();
-  }
-}
+      //otherwise if there is not any pending material render the chart
+      else{
+        renderChart();
+      }
+    
+  })
+ }
+  //check and see if there is pending items
+  
 updateAndGetData();
+
+
+
 
 function renderChart(){
   fetch("/api/transaction")
   .then(response => {
-    console.log("first then runs");
     return response.json();
   })
   .then(async function(data) {
     // save db data on global variable
-    console.log("seceont thend runs");
     transactions = data;
-    localStorage.setItem("budget", JSON.stringify(data));
-    populateTotal();
-    populateTable();
-    populateChart();
+
+    useBudgetIndexDb("updateBudget",data,()=>{
+      populateTotal();
+      populateTable();
+      populateChart();
+    })
+
+
   }).catch(err=>{
-    console.log("in the console because we failed to get the data");
-    transactions = JSON.parse(localStorage.getItem("budget"));
-    populateTotal();
-    populateTable();
-    populateChart();
+    useBudgetIndexDb("getBudget","",(budgetData)=>{
+      transactions = budgetData;
+      populateTotal();
+      populateTable();
+      populateChart();
+    })
+
   })
 }
 
@@ -145,13 +219,8 @@ function sendTransaction(isAdding) {
   // add to beginning of current array of data
   transactions.unshift(transaction);
 
-  //add to the beginning of the local storage
-  let budget = JSON.parse(localStorage.getItem("budget"));
-  if(!budget){
-    budget=[];
-  }
-  budget.unshift(transaction);
-  localStorage.setItem("budget",JSON.stringify(budget));
+  //add to budget in indexDB
+  useBudgetIndexDb("addBudget", transaction )
 
 
   // re-run logic to populate ui with new record
@@ -182,15 +251,8 @@ function sendTransaction(isAdding) {
     }
   })
   .catch(err => {
-    // fetch failed, so save in local storage
-//    saveRecord(transaction);
 
-    let pending = JSON.parse(localStorage.getItem("pending"));
-    if(!pending){
-      pending = [];
-    }
-    pending.unshift(transaction);
-    localStorage.setItem("pending",JSON.stringify(pending));
+    useBudgetIndexDb("addPending",transaction);
     // clear form
     nameEl.value = "";
     amountEl.value = "";
